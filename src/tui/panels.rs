@@ -2,12 +2,13 @@
 
 use super::theme::*;
 use super::widgets::{meter, panel, stacked};
-use super::{detail, gpu_watts, primary_net, sensors, tj_max, App, Sort, Tab};
+use super::{detail, gpu_watts, primary_net, sensors, tj_max, Action, App, MouseTargets, Sort, Tab};
 use crate::alerts::Level;
 use crate::collect::cpu::Core;
 use crate::collect::spbm::Limit;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 
 /// Smallest terminal the app draws in at all.
@@ -112,36 +113,52 @@ pub(super) fn text_width(spans: &[Span]) -> usize {
 
 // ---------- screen ----------
 
-pub fn draw(buf: &mut Buffer, area: Rect, app: &App) {
+pub(super) fn draw(buf: &mut Buffer, area: Rect, app: &App) -> MouseTargets {
+    let mut targets = MouseTargets::default();
     if area.width < MIN_W || area.height < MIN_H {
         let msg = format!(
             "gb10top needs at least {MIN_W}x{MIN_H} (this terminal is {}x{})",
             area.width, area.height
         );
-        buf.set_line(area.x, area.y, &Line::from(span(msg, WARN)), area.width);
-        return;
+        if area.height > 1 {
+            buf.set_line(area.x, area.y, &Line::from(span(msg, WARN)), area.width);
+        }
+        if area.height > 0 {
+            controls(
+                buf,
+                Rect::new(area.x, area.bottom() - 1, area.width, 1),
+                &mut targets,
+                [(button_face(" Quit ", false), Some(Action::Quit))],
+            );
+        }
+        return targets;
     }
     let [head, tabs, body, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(if app.tab == Tab::Procs { 2 } else { 1 }),
     ])
     .areas(area);
     header(buf, head, app);
-    tab_bar(buf, tabs, app);
+    tab_bar(buf, tabs, app, &mut targets);
     match app.tab {
-        Tab::Overview if area.width >= FULL_W && area.height >= FULL_H => overview(buf, body, app),
-        Tab::Overview => compact(buf, body, app),
+        Tab::Overview if area.width >= FULL_W && area.height >= FULL_H => overview(buf, body, app, &mut targets),
+        Tab::Overview => compact(buf, body, app, &mut targets),
         Tab::Power => detail::power(buf, body, app),
         Tab::Gpu => detail::gpu(buf, body, app),
         Tab::Cpu => detail::cpu(buf, body, app),
         Tab::Thermal => detail::thermal(buf, body, app),
         Tab::Io => detail::io(buf, body, app),
-        Tab::Procs => processes(buf, body, app, Some(app.scroll)),
+        Tab::Procs => {
+            targets.processes = Some(body);
+            targets.scroll_end = Some(app.snap.procs.len().saturating_sub(process_rows(body)));
+            processes(buf, body, app, Some(app.scroll), &mut targets);
+        }
         Tab::Events => detail::events(buf, body, app),
     }
-    footer(buf, foot, app);
+    footer(buf, foot, app, &mut targets);
+    targets
 }
 
 /// Split into two columns, or two rows when the area is narrower than
@@ -156,7 +173,7 @@ pub(super) fn split2(area: Rect, left_pct: u16, min_cols_width: u16) -> [Rect; 2
 }
 
 /// The full overview: every subsystem at once.
-fn overview(buf: &mut Buffer, area: Rect, app: &App) {
+fn overview(buf: &mut Buffer, area: Rect, app: &App, targets: &mut MouseTargets) {
     // The thermal / I/O row is dropped on short terminals.
     let tall = area.height >= 38;
     let mut cons = vec![Constraint::Length(12), Constraint::Length(10)];
@@ -178,11 +195,11 @@ fn overview(buf: &mut Buffer, area: Rect, app: &App) {
         io(buf, r, app);
         next += 1;
     }
-    processes(buf, rows[next], app, None);
+    processes(buf, rows[next], app, None, targets);
 }
 
 /// Overview for small terminals: one meter line per subsystem, then processes.
-fn compact(buf: &mut Buffer, area: Rect, app: &App) {
+fn compact(buf: &mut Buffer, area: Rect, app: &App, targets: &mut MouseTargets) {
     let s = &app.snap;
     let [top, rest] = Layout::vertical([Constraint::Length(8), Constraint::Min(0)]).areas(area);
     let mut p = panel(buf, top, "SUMMARY", ACCENT, vec![dim("tabs 2-6 show each subsystem in full")]);
@@ -256,10 +273,10 @@ fn compact(buf: &mut Buffer, area: Rect, app: &App) {
     for (row, l) in lines.into_iter().enumerate() {
         p.line(row as u16, l);
     }
-    processes(buf, rest, app, None);
+    processes(buf, rest, app, None, targets);
 }
 
-fn tab_bar(buf: &mut Buffer, area: Rect, app: &App) {
+fn tab_bar(buf: &mut Buffer, area: Rect, app: &App, targets: &mut MouseTargets) {
     let active = app.alerts.active().count();
     let build = |names: bool| -> Vec<Span<'static>> {
         let mut l = vec![Span::raw(" ")];
@@ -272,20 +289,17 @@ fn tab_bar(buf: &mut Buffer, area: Rect, app: &App) {
             if *t == Tab::Events && active > 0 {
                 text.push_str(&format!(" ({active})"));
             }
-            if *t == app.tab {
-                l.push(badge(&text, ACCENT));
-            } else {
-                l.push(dim(format!(" {text} ")));
-            }
+            l.push(button_face(format!(" {text} "), *t == app.tab));
         }
         l
     };
     // Tab names are dropped (all but the active one) when they do not fit.
     let mut l = build(true);
-    if text_width(&l) > area.width as usize {
+    if text_width(&l) + Tab::ALL.len() - 1 > area.width as usize {
         l = build(false);
     }
-    buf.set_line(area.x, area.y, &Line::from(l), area.width);
+    let actions = std::iter::once(None).chain(Tab::ALL.map(|tab| Some(Action::Tab(tab))));
+    controls(buf, area, targets, l.into_iter().zip(actions));
 }
 
 fn header(buf: &mut Buffer, area: Rect, app: &App) {
@@ -696,19 +710,23 @@ pub(super) fn io(buf: &mut Buffer, area: Rect, app: &App) {
 
 /// Process table. With `scroll` the list starts at that row and the title
 /// shows the position; without it only the top rows are shown.
-pub(super) fn processes(buf: &mut Buffer, area: Rect, app: &App, scroll: Option<usize>) {
+fn processes(buf: &mut Buffer, area: Rect, app: &App, scroll: Option<usize>, targets: &mut MouseTargets) {
     let s = &app.snap;
     let mut procs: Vec<_> = s.procs.iter().collect();
     match app.sort {
+        Sort::Pid => procs.sort_by_key(|p| p.pid),
+        Sort::Name => procs.sort_by(|a, b| a.name.cmp(&b.name)),
+        Sort::Container => procs.sort_by_key(|p| (p.container.is_none(), &p.container)),
         // Idle processes tie at zero; break ties by memory so the list stays useful.
         Sort::Cpu => procs.sort_by(|a, b| {
             b.cpu.unwrap_or(0.0).total_cmp(&a.cpu.unwrap_or(0.0)).then(b.rss.cmp(&a.rss))
         }),
-        Sort::Mem => procs.sort_by_key(|x| std::cmp::Reverse(x.rss + x.gpu_mem.unwrap_or(0))),
+        Sort::Mem => procs.sort_by_key(|x| std::cmp::Reverse(x.rss)),
+        Sort::Share => procs.sort_by_key(|x| std::cmp::Reverse(x.rss + x.gpu_mem.unwrap_or(0))),
         Sort::Gpu => procs.sort_by_key(|x| std::cmp::Reverse((x.gpu_mem.unwrap_or(0), x.rss))),
     }
     let gpu_users = procs.iter().filter(|x| x.gpu_kind.is_some()).count();
-    let visible = (area.height as usize).saturating_sub(3);
+    let visible = process_rows(area);
     let first = scroll.unwrap_or(0).min(procs.len().saturating_sub(visible));
     let right = match scroll {
         Some(_) => vec![dim(format!(
@@ -724,27 +742,42 @@ pub(super) fn processes(buf: &mut Buffer, area: Rect, app: &App, scroll: Option<
     let total = s.mem.as_ref().map(|m| m.total).unwrap_or(1).max(1) as f64;
 
     // Fixed columns; the memory meter takes whatever width is left.
-    let name_w = if w >= 120 { 22 } else { 16 };
-    let cont_w = if w >= 120 { 24 } else { 18 };
+    let (name_w, cont_w) = match w {
+        120.. => (22, 24),
+        68.. => (16, 18),
+        _ => (11, 13),
+    };
     let bar_w = w.saturating_sub(8 + name_w + cont_w + 8 + 9 + 9 + 4).min(40);
     // Too narrow for a meaningful meter: drop the column.
     let bar_w = if bar_w < 10 { 0 } else { bar_w };
-    let head = |text: &str, key: Sort| -> Span<'static> {
-        if app.sort == key {
-            bold(format!("{text}▼"), ACCENT)
+    let mut headers = Vec::new();
+    let mut header = |name: &str, key, width: usize, align_left| {
+        let selected = app.sort == key;
+        let arrow = match (selected, key) {
+            (false, _) => " ",
+            (true, Sort::Pid | Sort::Name | Sort::Container) => "▲",
+            (true, _) => "▼",
+        };
+        let text = format!("{name}{arrow}");
+        let face_width = width - 1;
+        let face = if align_left {
+            format!("{text:<face_width$}")
         } else {
-            dim(format!("{text} "))
-        }
+            format!("{text:>face_width$}")
+        };
+        headers.push((button_face(face, selected), Some(Action::Sort(key))));
+        headers.push((Span::raw(" "), None));
     };
-    p.line(0, vec![
-        dim(format!("{:>7} ", "PID")),
-        dim(format!("{:<name_w$}", "NAME")),
-        dim(format!("{:<cont_w$}", "CONTAINER")),
-        head("   CPU%", Sort::Cpu),
-        head("     MEM", Sort::Mem),
-        head("     GPU", Sort::Gpu),
-        dim(if bar_w > 0 { "  MEM + GPU SHARE" } else { "" }),
-    ]);
+    header("PID", Sort::Pid, 8, false);
+    header("NAME", Sort::Name, name_w, true);
+    header("CONTAINER", Sort::Container, cont_w, true);
+    header("CPU%", Sort::Cpu, 8, false);
+    header("MEM", Sort::Mem, 9, false);
+    header("GPU", Sort::Gpu, 9, false);
+    if bar_w > 0 {
+        header(if bar_w >= 18 { "MEM + GPU SHARE" } else { "SHARE" }, Sort::Share, bar_w, true);
+    }
+    controls(p.buf, p.area, targets, headers);
     let clip = |t: &str, n: usize| -> String { t.chars().take(n.saturating_sub(1)).collect() };
     for (i, x) in procs.iter().skip(first).take(visible).enumerate() {
         let cpu = x.cpu.unwrap_or(0.0);
@@ -776,19 +809,96 @@ pub(super) fn processes(buf: &mut Buffer, area: Rect, app: &App, scroll: Option<
     }
 }
 
-fn footer(buf: &mut Buffer, area: Rect, app: &App) {
-    let key = |k: &str, what: &str| vec![bold(format!(" {k} "), ACCENT), dim(format!("{what}  "))];
-    let mut groups = vec![key("q", "quit"), key("1-8 ←→", "tabs")];
-    if matches!(app.tab, Tab::Overview | Tab::Procs) {
-        groups.push(key("c m g", "sort cpu / mem / gpu"));
+fn process_rows(area: Rect) -> usize {
+    (area.height as usize).saturating_sub(3)
+}
+
+/// A filled surface for clickable labels. Padding belongs to the hit area.
+fn button_face(text: impl Into<String>, selected: bool) -> Span<'static> {
+    if selected {
+        bold(text, (16, 18, 28)).bg(color(ACCENT))
+    } else {
+        bold(text, FG).bg(color(TRACK))
     }
+}
+
+fn controls(
+    buf: &mut Buffer,
+    area: Rect,
+    targets: &mut MouseTargets,
+    items: impl IntoIterator<Item = (Span<'static>, Option<Action>)>,
+) -> u16 {
+    if area.is_empty() {
+        return area.x;
+    }
+    let mut x = area.x;
+    let mut previous_button = false;
+    for (span, action) in items {
+        if previous_button && action.is_some() {
+            x = x.saturating_add(1);
+        }
+        previous_button = action.is_some();
+        let width = (span.width() as u16).min(area.right().saturating_sub(x));
+        if width == 0 {
+            break;
+        }
+        if let Some(action) = action {
+            targets.buttons.push((Rect::new(x, area.y, width, 1), action));
+        }
+        buf.set_span(x, area.y, &span, width);
+        x += width;
+    }
+    x
+}
+
+fn footer(buf: &mut Buffer, area: Rect, app: &App, targets: &mut MouseTargets) {
+    let label = |key: &str, name: &str| {
+        if area.width >= 90 && key != name {
+            format!(" {key} {name} ")
+        } else {
+            format!(" {name} ")
+        }
+    };
+    let button = |key, name, action| (button_face(label(key, name), false), Some(action));
+    let sort = |shortcut, name, key| {
+        (button_face(label(shortcut, name), app.sort == key), Some(Action::Sort(key)))
+    };
+    let sorts = || [sort("c", "CPU", Sort::Cpu), sort("m", "Mem", Sort::Mem), sort("g", "GPU", Sort::Gpu)];
+    let mut global = vec![
+        button("q", "Quit", Action::Quit),
+        button("Space", if app.paused { "Resume" } else { "Pause" }, Action::Pause),
+    ];
+    if app.tab == Tab::Overview {
+        global.push((dim(if area.width >= 70 { "  Sort " } else { "  " }), None));
+        global.extend(sorts());
+    }
+    global.extend([
+        button("-", "Faster", Action::Faster),
+        button("+", "Slower", Action::Slower),
+        (dim(format!(" {:.2}s", app.interval)), None),
+    ]);
     if app.tab == Tab::Procs {
-        groups.push(key("↑↓ PgUp PgDn", "scroll"));
+        controls(
+            buf,
+            Rect::new(area.x, area.y, area.width, 1),
+            targets,
+            [(dim("Sort "), None)].into_iter().chain(sorts()).chain([
+                (dim(" Scroll "), None),
+                button("Home", "Top", Action::Top),
+                button("PgUp", "PgUp", Action::Scroll(-10)),
+                button("↑", "↑", Action::Scroll(-1)),
+                button("↓", "↓", Action::Scroll(1)),
+                button("PgDn", "PgDn", Action::Scroll(10)),
+            ]),
+        );
     }
-    groups.push(key("space", if app.paused { "resume" } else { "pause" }));
-    groups.push(key("- +", &format!("refresh {:.2}s", app.interval)));
+    let y = area.bottom() - 1;
+    let end = controls(buf, Rect::new(area.x, y, area.width, 1), targets, global);
     if app.cfg.log.is_some() && app.log_error.is_none() {
-        groups.push(vec![span("● ", OK), dim("logging")]);
+        let logging = span(" ● logging", OK);
+        let remaining = area.right().saturating_sub(end);
+        if logging.width() <= usize::from(remaining) {
+            buf.set_span(end, y, &logging, remaining);
+        }
     }
-    buf.set_line(area.x, area.y, &Line::from(fit(groups, area.width as usize)), area.width);
 }

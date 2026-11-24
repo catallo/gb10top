@@ -34,14 +34,15 @@ The full overview needs a terminal of at least 110x31; 150x46 shows
 everything. Smaller terminals (down to 60x14) get a compact summary, and the
 detail tabs still work.
 
-| Key | Action |
-|---|---|
-| `1`-`8`, `Tab`, `←` `→` | switch tab |
-| `c` `m` `g` | sort processes by CPU, memory, GPU memory |
-| `↑` `↓` `PgUp` `PgDn` `Home` | scroll the process list (Procs tab) |
-| `space` | pause |
-| `-` `+` | refresh faster / slower |
-| `q` | quit |
+| Key | Mouse | Action |
+|---|---|---|
+| `1`-`8`, `Tab`, `←` `→` | Click a tab | Switch tab |
+| `c` `m` `g` | Click the CPU, MEM, or GPU column header or footer button | Sort processes by CPU, resident memory, or GPU memory |
+| `i` `n` `o` `s` | Click PID, NAME, CONTAINER, or MEM + GPU SHARE | Sort by process ID, name, container, or combined resident and GPU memory |
+| `↑` `↓` `PgUp` `PgDn` `Home` | Use the wheel over the list or click **↑**, **↓**, **PgUp**, **PgDn**, or **Top** | Scroll the process list on the Procs tab |
+| `space` | Click **Pause** or **Resume** | Toggle sampling |
+| `-` `+` | Click **Faster** or **Slower** | Change the refresh interval |
+| `q` | Click **Quit** | Quit |
 
 | Tab | Contents |
 |---|---|

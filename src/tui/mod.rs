@@ -15,7 +15,12 @@ use crate::history::{self, Ring};
 use crate::sysfs::{read_str, Root};
 use anyhow::Result;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::{Position, Rect};
 use ratatui::Terminal;
 use std::collections::HashMap;
 use std::io::Write;
@@ -106,9 +111,51 @@ impl Tab {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Sort {
+    Pid,
+    Name,
+    Container,
+    Share,
     Cpu,
     Mem,
     Gpu,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Action {
+    Quit,
+    Tab(Tab),
+    Sort(Sort),
+    Pause,
+    Faster,
+    Slower,
+    Scroll(isize),
+    Top,
+}
+
+#[derive(Default)]
+struct MouseTargets {
+    buttons: Vec<(Rect, Action)>,
+    processes: Option<Rect>,
+    scroll_end: Option<usize>,
+}
+
+impl MouseTargets {
+    fn action(&self, mouse: MouseEvent) -> Option<Action> {
+        let position = Position::new(mouse.column, mouse.row);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            return self.buttons.iter()
+                .find(|(area, _)| area.contains(position))
+                .map(|(_, action)| *action);
+        }
+        if self.processes.is_some_and(|area| area.contains(position)) {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => return Some(Action::Scroll(-3)),
+                MouseEventKind::ScrollDown => return Some(Action::Scroll(3)),
+                _ => {}
+            }
+        }
+        None
+    }
 }
 
 pub struct App {
@@ -316,31 +363,56 @@ impl App {
         new_crit
     }
 
+    fn key_action(&self, code: KeyCode, mods: KeyModifiers) -> Option<Action> {
+        Some(match code {
+            KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+            KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => Action::Quit,
+            KeyCode::Char(d @ '1'..='8') => Action::Tab(Tab::ALL[d as usize - '1' as usize]),
+            KeyCode::Tab | KeyCode::Right => Action::Tab(self.tab.step(1)),
+            KeyCode::BackTab | KeyCode::Left => Action::Tab(self.tab.step(-1)),
+            KeyCode::Char('i') => Action::Sort(Sort::Pid),
+            KeyCode::Char('n') => Action::Sort(Sort::Name),
+            KeyCode::Char('o') => Action::Sort(Sort::Container),
+            KeyCode::Char('s') => Action::Sort(Sort::Share),
+            KeyCode::Char('c') => Action::Sort(Sort::Cpu),
+            KeyCode::Char('m') => Action::Sort(Sort::Mem),
+            KeyCode::Char('g') => Action::Sort(Sort::Gpu),
+            KeyCode::Char(' ') | KeyCode::Char('p') => Action::Pause,
+            KeyCode::Char('+') | KeyCode::Char('=') => Action::Slower,
+            KeyCode::Char('-') => Action::Faster,
+            KeyCode::Down | KeyCode::Char('j') => Action::Scroll(1),
+            KeyCode::Up | KeyCode::Char('k') => Action::Scroll(-1),
+            KeyCode::PageDown => Action::Scroll(10),
+            KeyCode::PageUp => Action::Scroll(-10),
+            KeyCode::Home => Action::Top,
+            _ => return None,
+        })
+    }
+
     /// Returns false when the app should quit.
-    fn on_key(&mut self, code: KeyCode, mods: KeyModifiers) -> bool {
-        let page = 10;
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => return false,
-            KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => return false,
-            KeyCode::Char(d @ '1'..='8') => self.tab = Tab::ALL[d as usize - '1' as usize],
-            KeyCode::Tab | KeyCode::Right => self.tab = self.tab.step(1),
-            KeyCode::BackTab | KeyCode::Left => self.tab = self.tab.step(-1),
-            KeyCode::Char('c') => self.sort = Sort::Cpu,
-            KeyCode::Char('m') => self.sort = Sort::Mem,
-            KeyCode::Char('g') => self.sort = Sort::Gpu,
-            KeyCode::Char(' ') | KeyCode::Char('p') => self.paused = !self.paused,
-            KeyCode::Char('+') | KeyCode::Char('=') => self.interval = (self.interval * 2.0).min(8.0),
-            KeyCode::Char('-') => self.interval = (self.interval / 2.0).max(0.25),
-            KeyCode::Down | KeyCode::Char('j') => self.scroll += 1,
-            KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
-            KeyCode::PageDown => self.scroll += page,
-            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(page),
-            KeyCode::Home => self.scroll = 0,
-            _ => {}
+    fn apply(&mut self, action: Action, scroll_end: Option<usize>) -> bool {
+        match action {
+            Action::Quit => return false,
+            Action::Tab(tab) => self.tab = tab,
+            Action::Sort(sort) => self.sort = sort,
+            Action::Pause => self.paused = !self.paused,
+            Action::Slower => self.interval = (self.interval * 2.0).min(8.0),
+            Action::Faster => self.interval = (self.interval / 2.0).max(0.25),
+            Action::Scroll(rows) => {
+                let end = scroll_end.unwrap_or_else(|| self.snap.procs.len().saturating_sub(1));
+                self.scroll = self.scroll.min(end).saturating_add_signed(rows).min(end);
+            }
+            Action::Top => self.scroll = 0,
         }
-        // The list can only scroll as far as its last row.
-        self.scroll = self.scroll.min(self.snap.procs.len().saturating_sub(1));
         true
+    }
+}
+
+struct MouseCapture;
+
+impl Drop for MouseCapture {
+    fn drop(&mut self) {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
 }
 
@@ -349,6 +421,8 @@ pub fn run(sampler: Sampler, root: &Root, cfg: Config) -> Result<()> {
     let mut app = App::new(sampler, root, cfg);
     let mut term = ratatui::init();
     let result = (|| -> Result<()> {
+        let _capture = MouseCapture;
+        execute!(std::io::stdout(), EnableMouseCapture)?;
         let mut next = Instant::now();
         loop {
             if Instant::now() >= next {
@@ -357,15 +431,33 @@ pub fn run(sampler: Sampler, root: &Root, cfg: Config) -> Result<()> {
                 }
                 next = Instant::now() + Duration::from_secs_f64(app.interval);
             }
+            let mut targets = MouseTargets::default();
             term.draw(|f| {
                 let area = f.area();
-                panels::draw(f.buffer_mut(), area, &app);
+                targets = panels::draw(f.buffer_mut(), area, &app);
             })?;
-            if event::poll(next.saturating_duration_since(Instant::now()))? {
-                if let Event::Key(k) = event::read()? {
-                    if k.kind == KeyEventKind::Press && !app.on_key(k.code, k.modifiers) {
+            // Mouse capture also reports pointer motion. Wait for an action,
+            // a resize or the sample deadline before drawing another frame.
+            loop {
+                if !event::poll(next.saturating_duration_since(Instant::now()))? {
+                    break;
+                }
+                let action = match event::read()? {
+                    Event::Key(k) if k.kind == KeyEventKind::Press => {
+                        app.key_action(k.code, k.modifiers)
+                    }
+                    Event::Mouse(mouse) => targets.action(mouse),
+                    Event::Resize(_, _) => break,
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    if !app.apply(action, targets.scroll_end) {
                         return Ok(());
                     }
+                    break;
+                }
+                if Instant::now() >= next {
+                    break;
                 }
             }
         }
@@ -416,4 +508,80 @@ fn bell() {
     let mut out = std::io::stdout();
     let _ = out.write_all(b"\x07");
     let _ = out.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    #[test]
+    fn every_mouse_control_fits_at_the_minimum_size() {
+        let root = Root::new("tests/fixtures/gx10");
+        let mut app = App::new(Sampler::new(&root), &root, Config::default());
+        let area = Rect::new(0, 0, 60, 14);
+        let mut buf = Buffer::empty(area);
+        let mouse = |kind, column, row| MouseEvent {
+            kind, column, row, modifiers: KeyModifiers::NONE,
+        };
+        let assert_click = |buf: &Buffer, targets: &MouseTargets, label: &str, action: Action| {
+            assert!(targets.buttons.iter().any(|(rect, _)| {
+                let rendered: String = (rect.x..rect.right())
+                    .map(|x| buf[(x, rect.y)].symbol())
+                    .collect();
+                rendered.trim() == label
+                    && targets.action(mouse(MouseEventKind::Down(MouseButton::Left), rect.x, rect.y))
+                        == Some(action)
+            }), "missing button {label}");
+        };
+
+        for tab in Tab::ALL {
+            app.tab = tab;
+            let targets = panels::draw(&mut buf, area, &app);
+            let click = |label, action| assert_click(&buf, &targets, label, action);
+            for target in Tab::ALL {
+                assert!(targets.buttons.iter().any(|(rect, _)| {
+                    targets.action(mouse(MouseEventKind::Down(MouseButton::Left), rect.x, rect.y))
+                        == Some(Action::Tab(target))
+                }));
+            }
+            for (label, action) in [
+                ("Quit", Action::Quit),
+                ("Pause", Action::Pause),
+                ("Faster", Action::Faster),
+                ("Slower", Action::Slower),
+            ] {
+                click(label, action);
+            }
+            if matches!(tab, Tab::Overview | Tab::Procs) {
+                // Inspect the table row itself, since the footer repeats some labels.
+                let (y, headers) = (2..area.height - 2).map(|y| {
+                    let row: String = (0..area.width).map(|x| buf[(x, y)].symbol()).collect();
+                    (y, row)
+                }).find(|(_, row)| row.contains("CONTAINER")).unwrap();
+                for (label, key) in [
+                    ("PID", Sort::Pid), ("NAME", Sort::Name), ("CONTAINER", Sort::Container),
+                    ("CPU%▼", Sort::Cpu), ("MEM", Sort::Mem), ("GPU", Sort::Gpu),
+                ] {
+                    let start = headers.find(label).unwrap_or_else(|| panic!("missing header {label}"));
+                    let x = headers[..start].chars().count() as u16;
+                    assert_eq!(targets.action(mouse(MouseEventKind::Down(MouseButton::Left), x, y)),
+                        Some(Action::Sort(key)));
+                }
+                click("CPU", Action::Sort(Sort::Cpu));
+                click("Mem", Action::Sort(Sort::Mem));
+                click("GPU", Action::Sort(Sort::Gpu));
+            }
+            if tab == Tab::Procs {
+                click("Top", Action::Top);
+                click("PgUp", Action::Scroll(-10));
+                click("↑", Action::Scroll(-1));
+                click("↓", Action::Scroll(1));
+                click("PgDn", Action::Scroll(10));
+                assert_eq!(targets.action(mouse(MouseEventKind::ScrollDown, 4, 4)), Some(Action::Scroll(3)));
+                assert_eq!(targets.action(mouse(MouseEventKind::ScrollUp, 4, 4)), Some(Action::Scroll(-3)));
+                assert_eq!(targets.action(mouse(MouseEventKind::ScrollDown, 4, 0)), None);
+            }
+        }
+    }
 }
