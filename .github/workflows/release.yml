@@ -3,23 +3,33 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (e.g. v0.1.0)
+        type: string
+        required: true
 
 jobs:
   linux-arm64:
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Test and compile
         run: |
           cargo test --locked
           cargo build --locked --release
-          test "$(target/release/gb10top --version)" = "gb10top ${GITHUB_REF_NAME#v}"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(target/release/gb10top --version)" = "gb10top ${RELEASE_TAG#v}"
 
       - name: Package binary
         run: |
@@ -30,6 +40,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag \
-            --title "gb10top $GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" --verify-tag --notes-from-tag \
+            --title "gb10top $RELEASE_TAG" \
             gb10top-linux-aarch64.tar.gz gb10top-linux-aarch64.tar.gz.sha256
