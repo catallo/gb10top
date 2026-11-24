@@ -33,8 +33,25 @@ Events example uses a custom 50% available-memory warning threshold.
 
 ## Install
 
+### Linux ARM64 binary
+
+Download `gb10top-linux-aarch64.tar.gz` and its `.sha256` file from the
+[latest release](https://github.com/catallo/gb10top/releases/latest).
+In the download directory, verify the archive and install the binary:
+
+```sh
+sha256sum --check gb10top-linux-aarch64.tar.gz.sha256
+tar -xzf gb10top-linux-aarch64.tar.gz
+install -Dm755 gb10top ~/.local/bin/gb10top
+~/.local/bin/gb10top --version
+```
+
+GitHub Actions builds the release on Ubuntu 24.04 ARM64. With `~/.local/bin`
+on your `PATH`, run `gb10top` from any directory.
+
+### From source
+
 Build on Linux with a Rust toolchain ([rustup](https://rustup.rs)).
-GPU telemetry uses NVML from the NVIDIA driver.
 
 ```sh
 git clone https://github.com/catallo/gb10top.git
@@ -45,7 +62,10 @@ cargo install --locked --path .
 Cargo installs `gb10top` in `~/.cargo/bin` by default. With that directory
 on your `PATH`, you can start it from any directory.
 
-Power telemetry comes from the `spbm` hwmon device, which is provided by the
+### Sensors
+
+GPU telemetry uses NVML from the NVIDIA driver. Power telemetry comes
+from the `spbm` hwmon device, which is provided by the
 out-of-tree [spark_hwmon](https://github.com/antheas/spark_hwmon) driver.
 Without it gb10top still runs; the power panels say the sensor is missing and
 GPU power falls back to NVML.
@@ -82,7 +102,7 @@ detail tabs still work.
 | Events | alert log, active alerts, thresholds |
 
 For NVMe wear, spare and error counters on the I/O tab, install `nvme-cli`
-and run `sudo ~/.cargo/bin/gb10top` if you used the default install location.
+and run `sudo "$(command -v gb10top)"`.
 
 ### Plain output
 

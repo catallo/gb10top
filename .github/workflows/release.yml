@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test and compile
+        run: |
+          cargo test --locked
+          cargo build --locked --release
+          test "$(target/release/gb10top --version)" = "gb10top ${GITHUB_REF_NAME#v}"
+
+      - name: Package binary
+        run: |
+          tar -czf gb10top-linux-aarch64.tar.gz -C target/release gb10top
+          sha256sum gb10top-linux-aarch64.tar.gz > gb10top-linux-aarch64.tar.gz.sha256
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag \
+            --title "gb10top $GITHUB_REF_NAME" \
+            gb10top-linux-aarch64.tar.gz gb10top-linux-aarch64.tar.gz.sha256

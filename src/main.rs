@@ -30,6 +30,7 @@ With no options, opens the interactive dashboard.
   --log <FILE>      Append one CSV row of headline metrics per sample to FILE
   --config <FILE>   Read this config file instead of ~/.config/gb10top/config.toml
   --print-config    Print the default config file and exit
+  -V, --version     Print the gb10top version and exit
 
 Plain output instead of the dashboard:
   --once            Print one human-readable sample and exit
@@ -93,6 +94,10 @@ fn parse_args() -> Result<Args> {
                 std::process::exit(0);
             }
             "--root" => a.root = value("--root")?,
+            "-V" | "--version" => {
+                println!("gb10top {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 std::process::exit(0);
