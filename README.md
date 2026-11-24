@@ -9,6 +9,28 @@ temperatures for each core cluster.
 Developed and measured on an ASUS Ascent GX10 (Ubuntu 24.04, kernel
 7.0-nvidia, driver 580).
 
+## Screenshots
+
+Click any tab below to open its full-size screenshot. These captures use live
+GX10 readings with anonymized host, process and container identifiers. The
+Events example uses a custom 50% available-memory warning threshold.
+
+| Overview | Power |
+|---|---|
+| [![Overview with CPU, GPU, memory and power panels](docs/screenshots/overview.png)](docs/screenshots/overview.png) | [![Power history, rail readings and firmware limits](docs/screenshots/power.png)](docs/screenshots/power.png) |
+
+| GPU | CPU |
+|---|---|
+| [![GPU utilization, power and processes](docs/screenshots/gpu.png)](docs/screenshots/gpu.png) | [![CPU load and frequency for each performance and efficiency core](docs/screenshots/cpu.png)](docs/screenshots/cpu.png) |
+
+| Thermal | I/O |
+|---|---|
+| [![Junction temperature history, sensors and cooling states](docs/screenshots/thermal.png)](docs/screenshots/thermal.png) | [![Storage activity, network traffic and PCIe links](docs/screenshots/io.png)](docs/screenshots/io.png) |
+
+| Procs | Events |
+|---|---|
+| [![Sortable process table with CPU, resident memory and GPU memory columns](docs/screenshots/procs.png)](docs/screenshots/procs.png) | [![Event log, active alerts and configured thresholds](docs/screenshots/events.png)](docs/screenshots/events.png) |
+
 ## Install
 
 Build on Linux with a Rust toolchain ([rustup](https://rustup.rs)).
