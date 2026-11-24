@@ -11,13 +11,17 @@ Developed and measured on an ASUS Ascent GX10 (Ubuntu 24.04, kernel
 
 ## Install
 
-Needs a Rust toolchain ([rustup](https://rustup.rs)) and the NVIDIA driver.
+Build on Linux with a Rust toolchain ([rustup](https://rustup.rs)).
+GPU telemetry uses NVML from the NVIDIA driver.
 
-```
-cargo install --path .
+```sh
+git clone https://github.com/catallo/gb10top.git
+cd gb10top
+cargo install --locked --path .
 ```
 
-This puts `gb10top` in `~/.cargo/bin`.
+Cargo installs `gb10top` in `~/.cargo/bin` by default. With that directory
+on your `PATH`, you can start it from any directory.
 
 Power telemetry comes from the `spbm` hwmon device, which is provided by the
 out-of-tree [spark_hwmon](https://github.com/antheas/spark_hwmon) driver.
@@ -52,10 +56,11 @@ detail tabs still work.
 | CPU | per-core load, cluster, frequency and trend; cluster temperatures; load and pressure |
 | Thermal | junction temperature history, every sensor, cooling states |
 | I/O | disk and network history, all interfaces, PCIe link states, drive health |
-| Procs | full scrollable process list |
+| Procs | sortable, scrollable list combining the top 40 processes by CPU, the top 40 by resident memory, and all detected GPU processes |
 | Events | alert log, active alerts, thresholds |
 
-Run it with `sudo` to add NVMe wear, spare and error counters to the I/O tab.
+For NVMe wear, spare and error counters on the I/O tab, install `nvme-cli`
+and run `sudo ~/.cargo/bin/gb10top` if you used the default install location.
 
 ### Plain output
 
@@ -70,7 +75,9 @@ option.
 
 ## Configuration
 
-Optional, at `~/.config/gb10top/config.toml` (or `--config FILE`).
+The optional config file is `~/.config/gb10top/config.toml`, or
+`$XDG_CONFIG_HOME/gb10top/config.toml` when `XDG_CONFIG_HOME` is set.
+Use `--config FILE` to select a different file.
 `gb10top --print-config` prints the defaults with comments:
 
 ```toml
