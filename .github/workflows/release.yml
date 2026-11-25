@@ -27,13 +27,14 @@ jobs:
       - name: Test and compile
         run: |
           cargo test --locked
-          cargo build --locked --release
+          cargo build --locked --release --message-format=json-render-diagnostics > "$RUNNER_TEMP/build.jsonl"
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$(target/release/gb10top --version)" = "gb10top ${RELEASE_TAG#v}"
 
       - name: Package binary
         run: |
-          tar -czf gb10top-linux-aarch64.tar.gz -C target/release gb10top
+          python3 tools/collect_licenses.py "$RUNNER_TEMP/third-party-licenses" < "$RUNNER_TEMP/build.jsonl"
+          tar -czf gb10top-linux-aarch64.tar.gz LICENSE -C "$RUNNER_TEMP" third-party-licenses -C "$GITHUB_WORKSPACE/target/release" gb10top
           sha256sum gb10top-linux-aarch64.tar.gz > gb10top-linux-aarch64.tar.gz.sha256
 
       - name: Publish GitHub release

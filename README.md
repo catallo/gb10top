@@ -190,3 +190,9 @@ To check a layout without a terminal, draw one frame as plain text:
 ```
 gb10top --render 150x46 --tab power
 ```
+
+## License
+
+gb10top is licensed under the [Apache License, Version 2.0](LICENSE).
+Binary release archives include the project license and third-party license
+texts and notices in `third-party-licenses/`.
